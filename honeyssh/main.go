@@ -11,7 +11,7 @@ import (
 
 var (
 	statsd     = kingpin.Flag("statsd", "URL to HoneySSH statds").Default("http://localhost:4000/attempt").String()
-	alwaysDeny = kingpin.Flag("always-deny", "Allways deny SSH login attempts").Default("true").Bool()
+	alwaysDeny = kingpin.Flag("always-deny", "Allways deny SSH login attempts").Default("false").Bool()
 	hostKey    = kingpin.Flag("key", "Path to SSH host key to use").Default("./id_rsa").String()
 	listen     = kingpin.Flag("listen", "Listen address in host:port format").Default("localhost:4022").String()
 )

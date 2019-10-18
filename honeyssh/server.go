@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
+	"os/exec"
+	"sync"
 	"syscall"
 	"unsafe"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/kr/pty"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -36,7 +40,8 @@ func sshServer(ch chan Attempt) {
 				return nil, fmt.Errorf("rejected")
 			}
 
-			return nil, fmt.Errorf("rejected")
+			logrus.Infof("accepting connection ...")
+			return nil, nil
 		},
 	}
 
@@ -65,20 +70,21 @@ func sshServer(ch chan Attempt) {
 			continue
 		}
 
-		sshConn, _, _, err := ssh.NewServerConn(tcpConn, &config)
+		_, chans, reqs, err := ssh.NewServerConn(tcpConn, &config)
 		if err != nil {
 			logrus.Error(err)
+			continue
 		}
-
-		if sshConn != nil {
-			sshConn.Close()
-		}
-		tcpConn.Close()
 
 		/*
-			go ssh.DiscardRequests(reqs)
-			go handleChannels(chans)
+			if sshConn != nil {
+					sshConn.Close()
+			}
+			tcpConn.Close()
 		*/
+
+		go ssh.DiscardRequests(reqs)
+		go handleChannels(chans)
 	}
 }
 
@@ -103,37 +109,35 @@ func handleChannel(newChannel ssh.NewChannel) {
 		return
 
 	}
-	/*
-		// Fire up bash for this session
-		bash := exec.Command("bash")
+	bash := exec.Command("bash")
 
-		// Prepare teardown function
-		close := func() {
-			connection.Close()
-			_, err := bash.Process.Wait()
-			if err != nil {
-				log.Printf("Failed to exit bash (%s)", err)
-
-			}
-			log.Printf("Session closed")
-
-		}
-
-		// Allocate a terminal for this channel
-		log.Print("Creating pty...")
-		bashf, err := pty.Start(bash)
+	// Prepare teardown function
+	close := func() {
+		connection.Close()
+		_, err := bash.Process.Wait()
 		if err != nil {
-			log.Printf("Could not start pty (%s)", err)
-			close()
-			return
+			log.Printf("Failed to exit bash (%s)", err)
 
 		}
-	*/
+		log.Printf("Session closed")
+
+	}
+
+	// Allocate a terminal for this channel
+	log.Print("Creating pty...")
+	bashf, err := pty.Start(bash)
+	if err != nil {
+		log.Printf("Could not start pty (%s)", err)
+		close()
+		return
+
+	}
+
 	//pipe session to bash and visa-versa
-	//var once sync.Once
+	var once sync.Once
 	go func() {
-		//io.Copy(connection, bashf)
-		//once.Do(close)
+		io.Copy(connection, bashf)
+		once.Do(close)
 
 		scanner := bufio.NewScanner(connection)
 		for scanner.Scan() {
@@ -143,8 +147,8 @@ func handleChannel(newChannel ssh.NewChannel) {
 		connection.Close()
 	}()
 	go func() {
-		//io.Copy(bashf, connection)
-		//once.Do(close)
+		io.Copy(bashf, connection)
+		once.Do(close)
 	}()
 
 	// Sessions have out-of-band requests such as "shell", "pty-req" and "env"
@@ -158,18 +162,16 @@ func handleChannel(newChannel ssh.NewChannel) {
 					req.Reply(true, nil)
 
 				}
-				/*
-					case "pty-req":
-						termLen := req.Payload[3]
-						w, h := parseDims(req.Payload[termLen+4:])
-						SetWinsize(bashf.Fd(), w, h)
-						// Responding true (OK) here will let the client
-						// know we have a pty ready for input
-						req.Reply(true, nil)
-					case "window-change":
-						w, h := parseDims(req.Payload)
-						SetWinsize(bashf.Fd(), w, h)
-				*/
+			case "pty-req":
+				termLen := req.Payload[3]
+				w, h := parseDims(req.Payload[termLen+4:])
+				SetWinsize(bashf.Fd(), w, h)
+				// Responding true (OK) here will let the client
+				// know we have a pty ready for input
+				req.Reply(true, nil)
+			case "window-change":
+				w, h := parseDims(req.Payload)
+				SetWinsize(bashf.Fd(), w, h)
 			}
 
 		}
